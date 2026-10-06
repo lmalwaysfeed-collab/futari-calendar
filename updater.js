@@ -8,11 +8,16 @@ import { fileURLToPath } from "node:url";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const BRANCH = () => process.env.UPDATE_BRANCH || "main";
-const REPO = () => (process.env.UPDATE_REPO || "").trim().replace(/^https:\/\/github\.com\//, "").replace(/\.git$/, "").replace(/\/$/, "");
+const DEFAULT_REPO = "lmalwaysfeed-collab/futari-calendar";
+const REPO = () => {
+  const v = (process.env.UPDATE_REPO || "").trim().replace(/^["']|["']$/g, "").replace(/^https?:\/\/(www\.)?github\.com\//, "").replace(/\.git$/, "").replace(/\/+$/, "");
+  return /^[\w.-]+\/[\w.-]+$/.test(v) ? v : DEFAULT_REPO;
+};
 // 上書きしないもの（あなたの設定・予定・記録）
 const KEEP = new Set(["gallery", ".env", "data.json", "data.json.tmp", "bot.log", "bot.log.old", "bot.pid", "node_modules", ".git"]);
 
-export const configured = () => /^[\w.-]+\/[\w.-]+$/.test(REPO());
+export const configured = () => true;
+export const repoName = () => REPO();
 
 export function localVersion() {
   try { return JSON.parse(fs.readFileSync(path.join(DIR, "package.json"), "utf8")).version; } catch { return "?"; }
@@ -21,7 +26,12 @@ export function localVersion() {
 /** GitHub にある最新のバージョン番号 */
 export async function remoteVersion() {
   const r = await fetch(`https://raw.githubusercontent.com/${REPO()}/${BRANCH()}/package.json?t=${Date.now()}`, { cache: "no-store" });
-  if (!r.ok) throw new Error(`GitHub から読めませんでした（${r.status}）。UPDATE_REPO と、リポジトリが公開になっているか確認してね`);
+  if (r.status === 404 && REPO() !== DEFAULT_REPO) {
+    // .env の UPDATE_REPO がまちがっていそうなときは、いつものリポジトリでもう一度ためす
+    const r2 = await fetch(`https://raw.githubusercontent.com/${DEFAULT_REPO}/${BRANCH()}/package.json?t=${Date.now()}`, { cache: "no-store" });
+    if (r2.ok) { process.env.UPDATE_REPO = DEFAULT_REPO; return (await r2.json()).version; }
+  }
+  if (!r.ok) throw new Error(`GitHub の「${REPO()}」から読めませんでした（${r.status}）。.env の UPDATE_REPO を確認してね`);
   return (await r.json()).version;
 }
 
@@ -61,7 +71,6 @@ function copyOver(src, dst, changed) {
 
 /** 新しいファイルを取ってきて上書きする。戻り値: { changed: [...], installed: bool } */
 export async function update() {
-  if (!configured()) throw new Error(".env に UPDATE_REPO（例: yourname/futari-calendar）が書かれていません");
   const pkgBefore = fs.readFileSync(path.join(DIR, "package.json"), "utf8");
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "futari-update-"));
   try {
