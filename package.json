@@ -1,6 +1,6 @@
 {
   "name": "futari-calendar",
-  "version": "1.8.1",
+  "version": "1.9.0",
   "private": true,
   "type": "module",
   "description": "ふたりで予定を共有する Discord bot（カレンダー画像つき）",

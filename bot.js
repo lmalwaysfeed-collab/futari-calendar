@@ -59,7 +59,7 @@ const COMMANDS = [
   { name: "みる", description: "SyncTube を開くボタンを出す" },
   {
     name: "お題", description: "お題ガチャを回す（そのままワンドロもはじめられる）",
-    options: [{ type: T.String, name: "追加", description: "ふたりで考えたお題をガチャに入れる", max_length: 30 }],
+    options: [{ type: T.String, name: "追加", description: "お題をこっそりガチャに入れる（相手には出るまでないしょ）", max_length: 30 }],
   },
   {
     name: "ワンドロ", description: "お題でワンドロのタイマーをはじめる",
@@ -470,28 +470,43 @@ function remember(theme, rarity) {
 }
 function odaiMessage(g, r) {
   const key = remember(r.theme, r.rarity);
+  const secret = r.secretBy !== undefined;
+  const who = r.secretBy ? nameOf(g, r.secretBy) : "だれか";
   const embed = new EmbedBuilder()
-    .setColor(r.rarity === 3 ? 0xffe27a : r.rarity === 2 ? LAVENDER : SKY)
-    .setAuthor({ name: r.rarity === 3 ? "🌟 SPECIAL お題がでた！" : "🎰 お題ガチャ" })
+    .setColor(r.rarity === 3 ? 0xffe27a : secret ? PINK : r.rarity === 2 ? LAVENDER : SKY)
+    .setAuthor({ name: r.rarity === 3 ? "🌟 SPECIAL お題がでた！" : secret ? (r.first ? "🤫 ひみつのお題がでた！" : "🤫 ひみつのお題（2回目）") : "🎰 お題ガチャ" })
     .setTitle(`「${r.theme}」`)
-    .setDescription(`${stars(r.rarity)}${r.rarity === 3 ? "　2つ組み合わせのレアお題だよ" : ""}`);
+    .setDescription(secret ? `💌 **${who}** がこっそり入れたお題だよ${r.first ? "！" : ""}` : `${stars(r.rarity)}${r.rarity === 3 ? "　2つ組み合わせのレアお題だよ" : ""}`);
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`odai:go:${key}:60`).setLabel("これで60分ワンドロ").setEmoji("⏱️").setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId(`odai:go:${key}:30`).setLabel("30分").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId("odai:again").setLabel("もう1回").setEmoji("🎰").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("secret").setLabel("こっそり追加").setEmoji("🤫").setStyle(ButtonStyle.Secondary),
   );
+  save(); // 出たかどうかを覚えておく
   return { embeds: [embed], components: [row] };
 }
 async function cmdOdai(i, g) {
   const add = i.options.getString("追加");
-  if (add) {
-    const t = add.trim().slice(0, 30);
-    g.themes ??= [];
-    if (!g.themes.includes(t)) g.themes.push(t);
-    save();
-    return i.reply({ embeds: [new EmbedBuilder().setColor(SKY).setTitle("🎀 お題を入れたよ").setDescription(`「${esc(t)}」\n-# ふたりのお題 ${g.themes.length}こ。ガチャで出やすくなってるよ`)] });
-  }
+  if (add) return i.reply(secretAdded(g, add, i.user.id));
   await i.reply(odaiMessage(g, ART.gacha(g)));
+}
+
+function secretAdded(g, text, by) {
+  const r = ART.addSecret(g, text, by);
+  save();
+  if (!r) return eph("お題が空っぽだよ");
+  if (r.dup) return eph("そのお題はもう入ってるよ 🤫");
+  return {
+    flags: MessageFlags.Ephemeral,
+    embeds: [new EmbedBuilder().setColor(PINK).setTitle("🤫 こっそり入れたよ")
+      .setDescription(`「${esc(String(text).trim().slice(0, 30))}」\n-# このメッセージはあなたにしか見えていないよ。ガチャで出るまで ないしょ\n-# ひみつのお題 ${r.total}こ（まだ出てないの ${r.waiting}こ）`)],
+  };
+}
+function secretModal() {
+  const input = new TextInputBuilder().setCustomId("t").setLabel("こっそり入れるお題").setStyle(TextInputStyle.Short)
+    .setPlaceholder("例: ふたりの秘密基地 / はじめて会った日").setRequired(true).setMaxLength(30);
+  return new ModalBuilder().setCustomId("secretModal").setTitle("🤫 ひみつのお題").addComponents(new ActionRowBuilder().addComponents(input));
 }
 
 /* ワンドロ */
@@ -527,7 +542,8 @@ async function cmdWandoro(i, g) {
   const r = given ? { theme: given.trim().slice(0, 40), rarity: 1 } : ART.gacha(g);
   const s = startSession(g, { theme: r.theme, rarity: r.rarity, minutes, channelId: i.channelId, by: i.user.id });
   const ids = s.participants;
-  await i.reply({ content: ids.map((id) => `<@${id}>`).join(" "), embeds: [sessionEmbed(g, s, "よーい、スタート！")], components: [sessionRow(s)], allowedMentions: { users: ids } });
+  const note = r.secretBy !== undefined ? `💌 ${nameOf(g, r.secretBy)} がこっそり入れたお題だよ！ よーい、スタート！` : "よーい、スタート！";
+  await i.reply({ content: ids.map((id) => `<@${id}>`).join(" "), embeds: [sessionEmbed(g, s, note)], components: [sessionRow(s)], allowedMentions: { users: ids } });
 }
 
 /** 提出（ワンドロ中で、その人がまだ出していなければ） */
@@ -856,6 +872,7 @@ async function onButton(i) {
 
   // 入力欄を開くボタンだけは、受け付けより先に開く必要がある
   if (id === "add") return i.showModal(addModal());
+  if (id === "secret") return i.showModal(secretModal());
   if (id.startsWith("pick:") && id.endsWith(":other")) {
     const pd = pending.get(id.split(":")[1]);
     return i.showModal(pd ? addModal("いつにする？ 🎀", `${pd.p.time ? timeLabel(pd.p) + " " : ""}${pd.p.title} `) : addModal());
@@ -906,6 +923,11 @@ async function onButton(i) {
 }
 
 async function onModal(i) {
+  if (i.customId === "secretModal") {
+    const g = guildData(i.guildId);
+    rememberName(g, i.user, i.member);
+    return i.reply(secretAdded(g, i.fields.getTextInputValue("t"), i.user.id));
+  }
   if (i.customId !== "addModal") return;
   const g = guildData(i.guildId);
   rememberName(g, i.user, i.member);

@@ -18,10 +18,24 @@ export const THEMES = {
 };
 const ALL = Object.values(THEMES).flat();
 
-/** お題ガチャ。12%で2つ組み合わせの★★★、25%で★★ */
+/** ふたりのお題（こっそり追加したもの）。むかしの文字だけの形も読めるようにする */
+export function secretThemes(g) {
+  g.themes = (g.themes || []).map((t) => (typeof t === "string" ? { text: t, by: null, drawn: 0 } : t));
+  return g.themes;
+}
+export function addSecret(g, text, by) {
+  const list = secretThemes(g);
+  const t = String(text).trim().slice(0, 30);
+  if (!t) return null;
+  if (list.some((x) => x.text === t)) return { dup: true, total: list.length };
+  list.push({ text: t, by, drawn: 0, at: Date.now() });
+  return { total: list.length, waiting: list.filter((x) => !x.drawn).length };
+}
+
+/** お題ガチャ。12%で2つ組み合わせの★★★、ひみつのお題があれば30%でそこから（まだ出てないもの優先） */
 export function gacha(g) {
-  const pool = [...ALL, ...(g.themes || [])];
   const pick = (list) => list[Math.floor(Math.random() * list.length)];
+  const secrets = secretThemes(g);
   const roll = Math.random();
   if (roll < 0.12) {
     const cats = Object.keys(THEMES);
@@ -30,8 +44,14 @@ export function gacha(g) {
     while (b === a) b = pick(cats);
     return { theme: `${pick(THEMES[a])} × ${pick(THEMES[b])}`, rarity: 3 };
   }
-  if (roll < 0.37 && g.themes?.length) return { theme: pick(g.themes), rarity: 2 }; // じぶんたちで入れたお題
-  return { theme: pick(pool), rarity: roll < 0.37 ? 2 : 1 };
+  if (roll < 0.42 && secrets.length) {
+    const fresh = secrets.filter((x) => !x.drawn);
+    const s = pick(fresh.length ? fresh : secrets);
+    const first = !s.drawn;
+    s.drawn = (s.drawn || 0) + 1;
+    return { theme: s.text, rarity: 2, secretBy: s.by, first };
+  }
+  return { theme: pick(ALL), rarity: roll < 0.6 ? 2 : 1 };
 }
 
 /* ===================== 作品の保存 ===================== */
