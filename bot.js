@@ -698,7 +698,8 @@ async function collectImages(msg, g) {
     if (!submitted && forSession) submitted = trySubmit(g, msg.author.id, rec);
   }
   save();
-  await msg.react(submitted ? "✅" : "🎀").catch(() => {});
+  await msg.react(submitted ? "✅" : "🎀").catch(() =>
+    msg.reply({ content: submitted ? `✅ ワンドロ「${g.session?.theme || ""}」に提出したよ！` : `🎀 ギャラリーに${imgs.length}枚入れたよ`, allowedMentions: { repliedUser: false } }).catch(() => {}));
   if (submitted && allIn(g.session)) await finishSession(msg.client, g);
   return true;
 }

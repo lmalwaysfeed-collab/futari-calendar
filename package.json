@@ -1,6 +1,6 @@
 {
   "name": "futari-calendar",
-  "version": "1.8.0",
+  "version": "1.8.1",
   "private": true,
   "type": "module",
   "description": "ふたりで予定を共有する Discord bot（カレンダー画像つき）",
@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node --env-file=.env bot.js",
-    "invite": "node --env-file=.env -e \"console.log('このURLをブラウザで開いてサーバーに招待してね:\\nhttps://discord.com/oauth2/authorize?client_id='+process.env.DISCORD_CLIENT_ID+'&scope=bot+applications.commands&permissions=17600776031232')\""
+    "invite": "node --env-file=.env -e \"console.log('このURLをブラウザで開いてサーバーに招待してね:\\nhttps://discord.com/oauth2/authorize?client_id='+process.env.DISCORD_CLIENT_ID+'&scope=bot+applications.commands&permissions=17600776031296')\""
   },
   "dependencies": {
     "@napi-rs/canvas": "^0.1.65",
