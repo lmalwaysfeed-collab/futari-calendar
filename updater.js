@@ -10,7 +10,7 @@ const DIR = path.dirname(fileURLToPath(import.meta.url));
 const BRANCH = () => process.env.UPDATE_BRANCH || "main";
 const REPO = () => (process.env.UPDATE_REPO || "").trim().replace(/^https:\/\/github\.com\//, "").replace(/\.git$/, "").replace(/\/$/, "");
 // 上書きしないもの（あなたの設定・予定・記録）
-const KEEP = new Set([".env", "data.json", "data.json.tmp", "bot.log", "bot.log.old", "bot.pid", "node_modules", ".git"]);
+const KEEP = new Set(["gallery", ".env", "data.json", "data.json.tmp", "bot.log", "bot.log.old", "bot.pid", "node_modules", ".git"]);
 
 export const configured = () => /^[\w.-]+\/[\w.-]+$/.test(REPO());
 

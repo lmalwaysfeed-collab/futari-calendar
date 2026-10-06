@@ -379,3 +379,6 @@ export function drawWeek(ctx, w) {
     }
   });
 }
+
+/* ほかの画像（作品カードなど）でも使うパーツ */
+export const deco = { rr, fit, wrap, heart, star, ribbon, tape, background, paper, pill, font: (w, px) => font(w, px), serif: (px, i, w) => serif(px, i, w), hand: (px) => hand(px) };

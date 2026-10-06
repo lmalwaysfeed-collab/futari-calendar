@@ -1,7 +1,8 @@
 // カレンダーをPNG画像にする（くっきり見えるように2倍の解像度で書き出す）
 import fs from "node:fs";
-import { createCanvas, GlobalFonts } from "@napi-rs/canvas";
+import { createCanvas, GlobalFonts, loadImage } from "@napi-rs/canvas";
 import { drawMonth, monthSize, drawWeek, weekSize, setFont, setSerifFont, setHandFont } from "./render.js";
+import * as AR from "./art-render.js";
 
 const SCALE = 2;
 
@@ -39,7 +40,7 @@ if (!jp.length) console.warn("日本語フォントが見つかりません。.e
 
 function render(sizeFn, drawFn, model) {
   const { width, height } = sizeFn(model);
-  const canvas = createCanvas(width * SCALE, height * SCALE);
+  const canvas = createCanvas(Math.ceil(width * SCALE), Math.ceil(height * SCALE));
   const ctx = canvas.getContext("2d");
   ctx.scale(SCALE, SCALE);
   drawFn(ctx, model);
@@ -47,3 +48,19 @@ function render(sizeFn, drawFn, model) {
 }
 export const monthPng = (model) => render(monthSize, drawMonth, model);
 export const weekPng = (model) => render(weekSize, drawWeek, model);
+
+/* 作品カード（ワンドロ結果・コラージュ・成長記録）。model.files に画像ファイルの場所が入っている */
+const ART = { pair: [AR.pairSize, AR.drawPair], collage: [AR.collageSize, AR.drawCollage], growth: [AR.growthSize, AR.drawGrowth] };
+export async function artPng(kind, model) {
+  const imgs = await Promise.all((model.files || []).map(async (f) => {
+    if (!f) return null;
+    try { return await loadImage(fs.readFileSync(f)); } catch { return null; }
+  }));
+  const [sizeFn, drawFn] = ART[kind];
+  const { width, height } = sizeFn(model);
+  const canvas = createCanvas(Math.ceil(width * SCALE), Math.ceil(height * SCALE));
+  const ctx = canvas.getContext("2d");
+  ctx.scale(SCALE, SCALE);
+  drawFn(ctx, model, imgs);
+  return canvas.toBuffer("image/png");
+}

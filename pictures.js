@@ -34,7 +34,7 @@ function startWorker() {
 let direct = null; // ワーカーが使えないときの予備
 async function renderDirect(kind, model) {
   direct ??= await import("./image.js");
-  return kind === "month" ? direct.monthPng(model) : direct.weekPng(model);
+  return kind === "month" ? direct.monthPng(model) : kind === "week" ? direct.weekPng(model) : direct.artPng(kind, model);
 }
 
 async function render(kind, model) {
@@ -58,3 +58,4 @@ async function render(kind, model) {
 
 export const monthPng = (model) => render("month", model);
 export const weekPng = (model) => render("week", model);
+export const artPng = (kind, model) => render(kind, model);

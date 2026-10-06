@@ -10,9 +10,10 @@ import {
 import * as L from "./lib.js";
 import { db, save, guildData } from "./store.js";
 import { monthModel, weekModel, headline, nameOf } from "./views.js";
-import { monthPng, weekPng } from "./pictures.js";
+import { monthPng, weekPng, artPng } from "./pictures.js";
 
 import * as UP from "./updater.js";
+import * as ART from "./art.js";
 export const VERSION = UP.localVersion();
 import * as SV from "./servers.js";
 import os from "node:os";
@@ -51,10 +52,40 @@ const COMMANDS = [
       { type: T.String, name: "記念日", description: "付き合った日 例: 2025/7/12" },
       { type: T.Integer, name: "朝の時刻", description: "朝のお知らせを送る時（0〜23、はじめは8時）", min_value: 0, max_value: 23 },
       { type: T.String, name: "synctube", description: "いつも使うSyncTubeのお部屋のURL（消すときは「なし」）" },
+      { type: T.Channel, name: "作品チャンネル", description: "ここに貼った画像を自動でギャラリーに入れる", channel_types: [ChannelType.GuildText] },
       { type: T.Boolean, name: "通話でボタン", description: "ボイスチャンネルに入ったら SyncTube ボタンを出す（はじめはオン）" },
     ],
   },
   { name: "みる", description: "SyncTube を開くボタンを出す" },
+  {
+    name: "お題", description: "お題ガチャを回す（そのままワンドロもはじめられる）",
+    options: [{ type: T.String, name: "追加", description: "ふたりで考えたお題をガチャに入れる", max_length: 30 }],
+  },
+  {
+    name: "ワンドロ", description: "お題でワンドロのタイマーをはじめる",
+    options: [
+      { type: T.Integer, name: "時間", description: "何分（はじめは60分）", min_value: 5, max_value: 240 },
+      { type: T.String, name: "お題", description: "省略するとガチャで決めるよ", max_length: 40 },
+    ],
+  },
+  {
+    name: "作品", description: "作品をギャラリーに入れる（ワンドロ中なら提出）",
+    options: [
+      { type: T.Attachment, name: "画像", description: "作品の画像（png / jpg / webp）", required: true },
+      { type: T.String, name: "タイトル", description: "作品の名前", max_length: 40 },
+    ],
+  },
+  {
+    name: "ギャラリー", description: "月ごとの作品をチェキ風に並べて見る",
+    options: [
+      { type: T.String, name: "月", description: "例: 10 / 2026/10（省略すると今月）" },
+      { type: T.User, name: "だれ", description: "ひとりの作品だけ見る" },
+    ],
+  },
+  {
+    name: "成長", description: "はじめのころと最近の作品を並べて見る",
+    options: [{ type: T.User, name: "だれ", description: "省略すると自分" }],
+  },
   { name: "サーバー", description: "仕訳バトルのサーバーを起動・停止する（ボタンで操作）" },
 ];
 
@@ -343,6 +374,8 @@ async function cmdSettings(i, g) {
   const theirNick = i.options.getString("あいての呼び名");
   const sync = i.options.getString("synctube");
   const syncAuto = i.options.getBoolean("通話でボタン");
+  const artCh = i.options.getChannel("作品チャンネル");
+  if (artCh) g.config.artChannelId = artCh.id;
   if (sync) {
     if (/^(なし|無し|消す|off|none)$/i.test(sync.trim())) delete g.config.synctube;
     else {
@@ -374,7 +407,7 @@ async function cmdSettings(i, g) {
   }
   save();
   const c = g.config;
-  const changed = inCh || ch || partner || anniv || hour !== null || myNick || theirNick || sync || syncAuto !== null;
+  const changed = inCh || ch || partner || anniv || hour !== null || myNick || theirNick || sync || syncAuto !== null || artCh;
   const embed = new EmbedBuilder()
     .setColor(SKY)
     .setTitle(changed ? "🎀 設定を保存したよ" : "🫧 いまの設定")
@@ -384,6 +417,7 @@ async function cmdSettings(i, g) {
       { name: "朝のお知らせ", value: `${c.morningHour ?? 8}時`, inline: true },
       { name: "ふたり", value: c.members.length ? c.members.map((id, k) => `${k === 0 ? "💜" : "🤍"} ${c.nick?.[id] ? `**${c.nick[id]}**（<@${id}>）` : `<@${id}>`}`).join("\n") : "未設定（`あいて` を入れてね）", inline: true },
       { name: "記念日", value: c.anniversary ? c.anniversary.replace(/-/g, "/") : "未設定", inline: true },
+      { name: "作品チャンネル", value: c.artChannelId ? `<#${c.artChannelId}>\n-# 画像を貼るとギャラリーに入るよ` : "未設定", inline: true },
       { name: "SyncTube", value: c.synctube ? `[お部屋を開く](${c.synctube})\n-# 通話でボタン: ${c.syncAuto === false ? "オフ" : "オン"}` : "未設定", inline: true },
     );
   await i.reply({ embeds: [embed], allowedMentions: { parse: [] } });
@@ -422,6 +456,287 @@ export async function handleVoice(oldState, newState) {
   } catch (e) {
     console.error(e);
   }
+}
+
+/* ---------------- 創作：お題ガチャ・ワンドロ・ギャラリー ---------------- */
+const PINK = 0xffb7d2;
+const stars = (n) => "★".repeat(n) + "☆".repeat(3 - n);
+const lastOdai = new Map(); // ボタン用に、出たお題を少しだけ覚えておく
+function remember(theme, rarity) {
+  for (const [k, v] of lastOdai) if (Date.now() - v.at > 6 * 3600_000) lastOdai.delete(k);
+  const key = Math.random().toString(36).slice(2, 8);
+  lastOdai.set(key, { theme, rarity, at: Date.now() });
+  return key;
+}
+function odaiMessage(g, r) {
+  const key = remember(r.theme, r.rarity);
+  const embed = new EmbedBuilder()
+    .setColor(r.rarity === 3 ? 0xffe27a : r.rarity === 2 ? LAVENDER : SKY)
+    .setAuthor({ name: r.rarity === 3 ? "🌟 SPECIAL お題がでた！" : "🎰 お題ガチャ" })
+    .setTitle(`「${r.theme}」`)
+    .setDescription(`${stars(r.rarity)}${r.rarity === 3 ? "　2つ組み合わせのレアお題だよ" : ""}`);
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`odai:go:${key}:60`).setLabel("これで60分ワンドロ").setEmoji("⏱️").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`odai:go:${key}:30`).setLabel("30分").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("odai:again").setLabel("もう1回").setEmoji("🎰").setStyle(ButtonStyle.Secondary),
+  );
+  return { embeds: [embed], components: [row] };
+}
+async function cmdOdai(i, g) {
+  const add = i.options.getString("追加");
+  if (add) {
+    const t = add.trim().slice(0, 30);
+    g.themes ??= [];
+    if (!g.themes.includes(t)) g.themes.push(t);
+    save();
+    return i.reply({ embeds: [new EmbedBuilder().setColor(SKY).setTitle("🎀 お題を入れたよ").setDescription(`「${esc(t)}」\n-# ふたりのお題 ${g.themes.length}こ。ガチャで出やすくなってるよ`)] });
+  }
+  await i.reply(odaiMessage(g, ART.gacha(g)));
+}
+
+/* ワンドロ */
+function sessionEmbed(g, s, note = "") {
+  const who = s.participants.map((id) => `${s.subs[id] ? "✅" : "✏️"} ${nameOf(g, id)}`).join("　");
+  return new EmbedBuilder()
+    .setColor(s.rare ? 0xffe27a : SKY)
+    .setAuthor({ name: s.ended ? "⏰ ワンドロ 提出タイム" : `⏱️ ${s.minutes}分ワンドロ` })
+    .setTitle(`「${s.theme}」`)
+    .setDescription(
+      (s.ended ? `提出のしめきり <t:${unix(s.graceEnd)}:R>` : `おわり <t:${unix(s.end)}:t>（<t:${unix(s.end)}:R>）`) +
+      `\n${who}\n\n-# できたら、このチャンネルに画像を貼るか /作品 で提出してね` + (note ? `\n${note}` : ""),
+    );
+}
+function sessionRow(s) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("wd:join").setLabel("参加する").setEmoji("🙋").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("wd:stop").setLabel("やめる").setStyle(ButtonStyle.Danger),
+  );
+}
+function startSession(g, { theme, rarity = 1, minutes = 60, channelId, by }) {
+  const now = Date.now();
+  const participants = g.config.members.length ? [...g.config.members] : [by];
+  if (!participants.includes(by)) participants.push(by);
+  g.session = { theme, rare: rarity === 3, minutes, start: now, end: now + minutes * 60_000, channelId, participants, subs: {}, warned: false, ended: false, graceEnd: 0 };
+  save();
+  return g.session;
+}
+async function cmdWandoro(i, g) {
+  if (g.session) return i.reply(eph(`いま「${g.session.theme}」のワンドロ中だよ。終わってからはじめてね`));
+  const minutes = i.options.getInteger("時間") ?? 60;
+  const given = i.options.getString("お題");
+  const r = given ? { theme: given.trim().slice(0, 40), rarity: 1 } : ART.gacha(g);
+  const s = startSession(g, { theme: r.theme, rarity: r.rarity, minutes, channelId: i.channelId, by: i.user.id });
+  const ids = s.participants;
+  await i.reply({ content: ids.map((id) => `<@${id}>`).join(" "), embeds: [sessionEmbed(g, s, "よーい、スタート！")], components: [sessionRow(s)], allowedMentions: { users: ids } });
+}
+
+/** 提出（ワンドロ中で、その人がまだ出していなければ） */
+function trySubmit(g, userId, rec) {
+  const s = g.session;
+  if (!s || !s.participants.includes(userId) || s.subs[userId]) return false;
+  s.subs[userId] = rec.id;
+  rec.theme = s.theme;
+  rec.source = "wandoro";
+  save();
+  return true;
+}
+const allIn = (s) => s.participants.every((id) => s.subs[id]);
+
+async function finishSession(client, g) {
+  const s = g.session;
+  if (!s) return;
+  g.session = null;
+  save();
+  const ch = await client.channels.fetch(s.channelId).catch(() => null);
+  if (!ch) return;
+  const entries = s.participants.map((id) => {
+    const rec = (g.art || []).find((a) => a.id === s.subs[id]);
+    return { name: nameOf(g, id), title: rec?.title || "", late: rec ? rec.at > s.end : false, file: rec ? ART.absPath(rec) : null };
+  });
+  if (!entries.some((e) => e.file)) {
+    return ch.send({ embeds: [new EmbedBuilder().setColor(MIST).setDescription(`🫧「${esc(s.theme)}」のワンドロは、提出がなかったので終わりにしたよ`)] });
+  }
+  const model = { theme: s.theme, rare: s.rare, minutes: s.minutes, date: L.fmtDate(L.today()), entries: entries.map(({ file, ...e }) => ({ ...e, file: !!file })), files: entries.map((e) => e.file) };
+  const file = new AttachmentBuilder(await artPng("pair", model), { name: "wandoro.png" });
+  const took = Math.round((Math.min(Date.now(), s.graceEnd || Date.now()) - s.start) / 60000);
+  const embed = new EmbedBuilder().setColor(PINK)
+    .setTitle(`🎀 ワンドロおつかれさま！「${s.theme}」`)
+    .setDescription(`${entries.filter((e) => e.file).length}作品できたよ　-# ${took}分`)
+    .setImage("attachment://wandoro.png");
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("odai:again").setLabel("つぎのお題").setEmoji("🎰").setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`gal:${L.ymd(L.today()).y}-${L.ymd(L.today()).m}:all`).setLabel("今月のギャラリー").setEmoji("🖼️").setStyle(ButtonStyle.Secondary),
+  );
+  await ch.send({ embeds: [embed], files: [file], components: [row] });
+}
+
+/* 作品の保存 */
+function savedMessage(g, rec, url, extra = "") {
+  const embed = new EmbedBuilder().setColor(PINK)
+    .setAuthor({ name: "🖼️ ギャラリーに入れたよ" })
+    .setTitle(rec.title || (rec.theme ? `「${rec.theme}」` : "無題"))
+    .setDescription(`${nameOf(g, rec.by)}　${L.fmtDate(rec.date)}　-# 今月 ${ART.monthArts(g, L.ymd(rec.date).y, L.ymd(rec.date).m, rec.by).length}作品め${extra ? `\n${extra}` : ""}`);
+  if (url) embed.setThumbnail(url);
+  const { y, m } = L.ymd(rec.date);
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`gal:${y}-${m}:all`).setLabel("今月のギャラリー").setEmoji("🖼️").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`art:undo:${rec.id}`).setLabel("取り消し").setEmoji("🗑️").setStyle(ButtonStyle.Secondary),
+  );
+  return { embeds: [embed], components: [row] };
+}
+async function cmdArt(i, g) {
+  const att = i.options.getAttachment("画像");
+  const title = i.options.getString("タイトル") || "";
+  await i.deferReply();
+  const rec = await ART.saveArtwork(i.guildId, g, att, { by: i.user.id, title, source: "command" });
+  const submitted = trySubmit(g, i.user.id, rec);
+  save();
+  await i.editReply(savedMessage(g, rec, att.url, submitted ? `⏱️ ワンドロ「${g.session.theme}」に提出したよ！` : ""));
+  if (submitted && allIn(g.session)) await finishSession(i.client, g);
+}
+
+/* ギャラリー・成長記録 */
+async function galleryMessage(g, y, m, who) {
+  const all = ART.monthArts(g, y, m, who);
+  const items = all.slice(-12);
+  const model = {
+    year: y, month: m, who: who ? nameOf(g, who) : "", total: all.length,
+    items: items.map((a) => ({ name: nameOf(g, a.by), title: a.title, theme: a.theme, date: L.fmtDate(a.date) })),
+    files: items.map((a) => ART.absPath(a)),
+  };
+  const file = new AttachmentBuilder(await artPng("collage", model), { name: "gallery.png" });
+  const p = L.shiftMonth(y, m, -1), n = L.shiftMonth(y, m, 1), w = who || "all";
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`gal:${p.y}-${p.m}:${w}`).setLabel(`◀ ${p.m}月`).setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`gal:${n.y}-${n.m}:${w}`).setLabel(`${n.m}月 ▶`).setStyle(ButtonStyle.Secondary),
+  );
+  for (const id of g.config.members) {
+    if (id !== who) row.addComponents(new ButtonBuilder().setCustomId(`gal:${y}-${m}:${id}`).setLabel(`${nameOf(g, id)}だけ`.slice(0, 20)).setStyle(ButtonStyle.Secondary));
+  }
+  if (who) row.addComponents(new ButtonBuilder().setCustomId(`gal:${y}-${m}:all`).setLabel("ふたりとも").setStyle(ButtonStyle.Secondary));
+  return { embeds: [], files: [file], components: [row], attachments: [] };
+}
+async function cmdGallery(i, g) {
+  const t = L.today();
+  let { y, m } = L.ymd(t);
+  const s = i.options.getString("月");
+  if (s) {
+    const mm = L.normalize(s).replace(/月$/, "").match(/^(?:(\d{4})[/\-.年])?(\d{1,2})$/);
+    if (!mm || +mm[2] < 1 || +mm[2] > 12) return i.reply(eph("月が読めなかったよ。例: `10` `2026/10`"));
+    if (mm[1]) y = +mm[1]; else if (+mm[2] > m) y -= 1; // 先の月を書いたら去年
+    m = +mm[2];
+  }
+  await i.deferReply();
+  await i.editReply(await galleryMessage(g, y, m, i.options.getUser("だれ")?.id || null));
+}
+async function cmdGrowth(i, g) {
+  const who = i.options.getUser("だれ")?.id || i.user.id;
+  const r = ART.growthPair(g, who);
+  if (r.count < 2) return i.reply(eph(`${nameOf(g, who)}の作品が2つ以上たまると見られるよ（いま${r.count}作品）`));
+  await i.deferReply();
+  const model = {
+    who: nameOf(g, who), span: r.span, count: r.count, sameTheme: r.sameTheme,
+    before: { title: r.before.title, date: r.before.date.replace(/-/g, "/") },
+    after: { title: r.after.title, date: r.after.date.replace(/-/g, "/") },
+    files: [ART.absPath(r.before), ART.absPath(r.after)],
+  };
+  const file = new AttachmentBuilder(await artPng("growth", model), { name: "growth.png" });
+  await i.editReply({ embeds: [new EmbedBuilder().setColor(PINK).setTitle(`🌱 ${nameOf(g, who)}の成長記録`).setDescription(`${r.span}で${r.count}作品！`).setImage("attachment://growth.png")], files: [file] });
+}
+
+/* 創作まわりのボタン（受け付け済みの状態で呼ばれる） */
+async function onArtButton(i, g, id) {
+  if (id === "odai:again") return i.followUp(odaiMessage(g, ART.gacha(g)));
+  if (id.startsWith("odai:go:")) {
+    const [, , key, min] = id.split(":");
+    const o = lastOdai.get(key);
+    if (!o) return i.followUp(eph("時間がたったので、もう一度ガチャを回してね"));
+    if (g.session) return i.followUp(eph(`いま「${g.session.theme}」のワンドロ中だよ`));
+    const s = startSession(g, { theme: o.theme, rarity: o.rarity, minutes: Number(min) || 60, channelId: i.channelId, by: i.user.id });
+    await i.editReply({ components: [] }).catch(() => {});
+    return i.followUp({ content: s.participants.map((x) => `<@${x}>`).join(" "), embeds: [sessionEmbed(g, s, "よーい、スタート！")], components: [sessionRow(s)], allowedMentions: { users: s.participants } });
+  }
+  if (id === "wd:join") {
+    const s = g.session;
+    if (!s) return i.editReply({ components: [] });
+    if (!s.participants.includes(i.user.id)) { s.participants.push(i.user.id); save(); }
+    return i.editReply({ embeds: [sessionEmbed(g, s)], components: [sessionRow(s)] });
+  }
+  if (id === "wd:stop") {
+    const s = g.session;
+    if (!s) return i.editReply({ components: [] });
+    if (Object.keys(s.subs).length) { await i.editReply({ components: [] }); return finishSession(i.client, g); }
+    g.session = null; save();
+    return i.editReply({ embeds: [new EmbedBuilder().setColor(MIST).setDescription(`🫧「${esc(s.theme)}」のワンドロをやめたよ`)], components: [] });
+  }
+  if (id.startsWith("art:undo:")) {
+    const rec = ART.removeArtwork(g, Number(id.split(":")[2]));
+    if (g.session) for (const [u, a] of Object.entries(g.session.subs)) if (rec && a === rec.id) delete g.session.subs[u];
+    save();
+    return i.editReply({ embeds: [new EmbedBuilder().setColor(MIST).setDescription(rec ? "🫧 ギャラリーから消したよ" : "もう消えているよ")], components: [] });
+  }
+  if (id.startsWith("gal:")) {
+    const [, ym, who] = id.split(":");
+    const [y, m] = ym.split("-").map(Number);
+    return i.editReply(await galleryMessage(g, y, m, who === "all" ? null : who));
+  }
+}
+
+/* 貼られた画像をギャラリーへ（ワンドロ中の提出・作品チャンネル） */
+async function collectImages(msg, g) {
+  const s = g.session;
+  const forSession = s && msg.channelId === s.channelId && s.participants.includes(msg.author.id) && !s.subs[msg.author.id];
+  const forChannel = g.config.artChannelId && msg.channelId === g.config.artChannelId;
+  if (!forSession && !forChannel) return false;
+  const imgs = [...msg.attachments.values()].filter(ART.isImage);
+  if (!imgs.length) return false;
+  rememberName(g, msg.author, msg.member);
+  const title = msg.content.replace(/<@!?\d+>/g, "").trim().split("\n")[0].slice(0, 40);
+  let submitted = false;
+  for (const att of imgs) {
+    const rec = await ART.saveArtwork(msg.guildId, g, att, { by: msg.author.id, title, source: forSession ? "wandoro" : "channel" });
+    if (!submitted && forSession) submitted = trySubmit(g, msg.author.id, rec);
+  }
+  save();
+  await msg.react(submitted ? "✅" : "🎀").catch(() => {});
+  if (submitted && allIn(g.session)) await finishSession(msg.client, g);
+  return true;
+}
+
+/* 時間の見はり（tick から30秒ごとに呼ばれる） */
+async function artTick(client, gid, g) {
+  const s = g.session;
+  let changed = false;
+  if (s) {
+    const ch = await client.channels.fetch(s.channelId).catch(() => null);
+    const now = Date.now();
+    const ping = (text) => ch?.send({ content: `${s.participants.filter((id) => !s.subs[id]).map((id) => `<@${id}>`).join(" ")}　${text}`, allowedMentions: { users: s.participants } }).catch(() => {});
+    if (!s.warned && s.minutes >= 20 && now >= s.end - 10 * 60_000 && now < s.end) {
+      s.warned = true; changed = true;
+      await ping(`⏳ 「${esc(s.theme)}」のこり10分だよ！`);
+    }
+    if (!s.ended && now >= s.end) {
+      s.ended = true; s.graceEnd = now + 30 * 60_000; changed = true;
+      if (allIn(s)) await finishSession(client, g);
+      else await ch?.send({ content: s.participants.filter((id) => !s.subs[id]).map((id) => `<@${id}>`).join(" "), embeds: [sessionEmbed(g, s, "⏰ そこまで！ できたところまででいいので、30分以内に提出してね")], allowedMentions: { users: s.participants } }).catch(() => {});
+    } else if (s.ended && now >= s.graceEnd) {
+      await finishSession(client, g);
+    }
+  }
+  // 月のはじめに、先月の作品をまとめて投稿
+  const t = L.nowParts();
+  const chId = g.config.artChannelId || g.config.channelId;
+  if (chId && t.date.endsWith("-01") && t.hh === (g.config.morningHour ?? 8) && g.config.lastCollage !== t.date) {
+    g.config.lastCollage = t.date; changed = true;
+    const p = L.shiftMonth(L.ymd(t.date).y, L.ymd(t.date).m, -1);
+    if (ART.monthArts(g, p.y, p.m).length) {
+      const ch = await client.channels.fetch(chId).catch(() => null);
+      const msg = await galleryMessage(g, p.y, p.m, null);
+      await ch?.send({ ...msg, content: `🖼️ ${p.m}月の作品まとめだよ！` }).catch(() => {});
+    }
+  }
+  void gid;
+  return changed;
 }
 
 /* ---------------- ボタン・入力欄 ---------------- */
@@ -551,6 +866,7 @@ async function onButton(i) {
   const gone = (text) => i.editReply({ embeds: [new EmbedBuilder().setColor(MIST).setDescription(text)], components: [], files: [], attachments: [] });
 
   if (id.startsWith("sv:")) return onServerButton(i, g);
+  if (/^(odai|wd|art|gal):/.test(id)) return onArtButton(i, g, id);
 
   if (id.startsWith("cal:")) {
     let y, m;
@@ -632,6 +948,11 @@ export async function handleInteraction(i) {
       case "設定": return await cmdSettings(i, g);
       case "サーバー": return await cmdServer(i, g);
       case "みる": return await cmdWatch(i, g);
+      case "お題": return await cmdOdai(i, g);
+      case "ワンドロ": return await cmdWandoro(i, g);
+      case "作品": return await cmdArt(i, g);
+      case "ギャラリー": return await cmdGallery(i, g);
+      case "成長": return await cmdGrowth(i, g);
     }
   } catch (e) {
     console.error(`失敗: ${what}`, e);
@@ -650,6 +971,7 @@ export async function handleMessage(msg, botUserId) {
   try {
     if (msg.author.bot || !msg.guildId) return;
     const g = guildData(msg.guildId);
+    if (msg.attachments?.size && await collectImages(msg, g).catch((e) => { console.error("作品の保存に失敗:", e); return false; })) return;
     const mentioned = msg.mentions.users.has(botUserId);
     const inChannel = g.config.inputChannelId && msg.channelId === g.config.inputChannelId;
     if (!mentioned && !inChannel) return;
@@ -667,7 +989,8 @@ export async function handleMessage(msg, botUserId) {
 export async function tick(client) {
   const now = L.nowParts();
   let changed = false;
-  for (const g of Object.values(db.guilds)) {
+  for (const [gid, g] of Object.entries(db.guilds)) {
+    if (await artTick(client, gid, g).catch((e) => { console.error(e); return false; })) changed = true;
     if (!g.config.channelId) continue;
     const ch = await client.channels.fetch(g.config.channelId).catch(() => null);
     if (!ch) continue;
