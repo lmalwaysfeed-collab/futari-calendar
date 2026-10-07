@@ -1,6 +1,6 @@
 // ふたりカレンダー bot 本体
 // 起動: npm start
-import { acquireLock, releaseLock } from "./logger.js";
+import { acquireLock, releaseLock, recentStarts } from "./logger.js";
 import {
   Client, GatewayIntentBits, Events, ApplicationCommandOptionType as T, ChannelType,
   EmbedBuilder, AttachmentBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags,
@@ -743,7 +743,8 @@ async function artTick(client, gid, g) {
   // 月のはじめに、先月の作品をまとめて投稿
   const t = L.nowParts();
   const chId = g.config.artChannelId || g.config.channelId;
-  if (chId && t.date.endsWith("-01") && t.hh === (g.config.morningHour ?? 8) && g.config.lastCollage !== t.date) {
+  const mh = g.config.morningHour ?? 8;
+  if (chId && t.date.endsWith("-01") && t.hh >= mh && t.hh < mh + 3 && g.config.lastCollage !== t.date) {
     g.config.lastCollage = t.date; changed = true;
     const p = L.shiftMonth(L.ymd(t.date).y, L.ymd(t.date).m, -1);
     if (ART.monthArts(g, p.y, p.m).length) {
@@ -1009,7 +1010,13 @@ export async function handleMessage(msg, botUserId) {
 }
 
 /* ---------------- 朝のお知らせ・リマインド ---------------- */
+let ticking = false;
 export async function tick(client) {
+  if (ticking) return; // 前の見はりがまだ終わっていなければ、今回はお休み（お知らせの二重送信を防ぐ）
+  ticking = true;
+  try { await tickOnce(client); } finally { ticking = false; }
+}
+async function tickOnce(client) {
   const now = L.nowParts();
   let changed = false;
   for (const [gid, g] of Object.entries(db.guilds)) {
@@ -1033,7 +1040,8 @@ export async function tick(client) {
     }
 
     // 朝のお知らせ
-    if (now.hh === (g.config.morningHour ?? 8) && g.config.lastMorning !== now.date) {
+    const mh = g.config.morningHour ?? 8;
+    if (now.hh >= mh && now.hh < mh + 3 && g.config.lastMorning !== now.date) {
       g.config.lastMorning = now.date; changed = true;
       g.events = g.events.filter((e) => e.date >= L.addDays(now.date, -60)); // 古い予定のおそうじ
       await ch.send(await weekMessage(g, now.date, { morning: true })).catch((e) => console.warn("朝のお知らせ送信に失敗:", e.message));
@@ -1096,6 +1104,17 @@ function start(withMessages) {
 
 for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, async () => { await SV.stopAll(); releaseLock(); process.exit(0); });
 
+// 思いがけないエラーでbotごと落ちないように（落ちて再起動するたびにログイン回数を使ってしまうため）
+process.on("unhandledRejection", (e) => console.error("処理しきれなかったエラー:", e));
+process.on("uncaughtException", (e) => console.error("思いがけないエラー（botは動き続けます）:", e));
+
+// メモ帳で保存した .env の先頭につく見えない文字（BOM）のせいで Token が読めないときの保険
+if (!process.env.DISCORD_TOKEN) {
+  const k = Object.keys(process.env).find((x) => x.replace(/^\uFEFF/, "") === "DISCORD_TOKEN");
+  if (k) process.env.DISCORD_TOKEN = process.env[k];
+}
+if (process.env.DISCORD_TOKEN) process.env.DISCORD_TOKEN = process.env.DISCORD_TOKEN.trim().replace(/^["']|["']$/g, "");
+
 if (!process.env.TEST) {
   if (!process.env.DISCORD_TOKEN) {
     console.error(".env に DISCORD_TOKEN がありません。README の手順を見てね");
@@ -1106,5 +1125,10 @@ if (!process.env.TEST) {
     process.exit(3); // start-bot.bat はこの番号を見て、くり返しをやめる
   }
   process.on("exit", releaseLock);
-  start(true);
+  // 10分で5回以上起動していたら、落ちては再起動をくり返している。ログイン回数を守るため15分休んでからつなぐ
+  const n = recentStarts();
+  if (n >= 5) {
+    console.warn(`この10分で${n}回起動しています。何かがおかしいので、15分待ってからDiscordにつなぎます（bot.log のエラーを確認してね）`);
+    setTimeout(() => start(true), 15 * 60_000);
+  } else start(true);
 }

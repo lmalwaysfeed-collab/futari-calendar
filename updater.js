@@ -14,7 +14,7 @@ const REPO = () => {
   return /^[\w.-]+\/[\w.-]+$/.test(v) ? v : DEFAULT_REPO;
 };
 // 上書きしないもの（あなたの設定・予定・記録）
-const KEEP = new Set(["gallery", ".env", "data.json", "data.json.tmp", "bot.log", "bot.log.old", "bot.pid", "node_modules", ".git"]);
+const KEEP = new Set(["gallery", "backups", "bot.starts", ".env", "data.json", "data.json.tmp", "bot.log", "bot.log.old", "bot.pid", "node_modules", ".git"]);
 
 export const configured = () => true;
 export const repoName = () => REPO();
@@ -58,6 +58,13 @@ function copyOver(src, dst, changed) {
   for (const name of fs.readdirSync(src)) {
     if (KEEP.has(name)) continue;
     const s = path.join(src, name), d = path.join(dst, name);
+    // 動いている start-bot.bat を途中で書きかえると、Windowsがおかしな行を実行することがあるので、
+    // start-bot.bat.new として置いておき、stop-all.bat / service-on*.bat を使ったときに入れかえる
+    if (/^start-bot\.bat$/i.test(name) && fs.existsSync(d)) {
+      const after = fs.readFileSync(s);
+      if (!fs.readFileSync(d).equals(after)) { fs.writeFileSync(d + ".new", after); changed.push(path.relative(DIR, d) + "（stop-all.bat か service-on のときに入れかえ）"); }
+      continue;
+    }
     if (fs.statSync(s).isDirectory()) {
       fs.mkdirSync(d, { recursive: true });
       copyOver(s, d, changed);

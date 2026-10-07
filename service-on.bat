@@ -21,6 +21,7 @@ if not exist ".env" (
 
 echo Stopping the bot that is running now...
 powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*start-bot.bat*' -or ($_.CommandLine -like '*bot.js*' -and $_.CommandLine -like '*env-file*') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+if exist "%~dp0start-bot.bat.new" move /y "%~dp0start-bot.bat.new" "%~dp0start-bot.bat" > nul
 schtasks /delete /tn "FutariCalendar" /f >nul 2>&1
 
 echo.

@@ -6,3 +6,7 @@ bot.log
 bot.log.old
 bot.pid
 gallery/
+backups/
+bot.starts
+*.new
+data.json.broken-*

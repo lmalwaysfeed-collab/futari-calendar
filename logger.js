@@ -8,7 +8,9 @@ const dir = path.dirname(fileURLToPath(import.meta.url));
 const FILE = path.join(dir, "bot.log");
 const PID = path.join(dir, "bot.pid");
 
-try { if (fs.statSync(FILE).size > 1_000_000) fs.renameSync(FILE, FILE + ".old"); } catch {}
+const rotate = () => { try { if (fs.statSync(FILE).size > 1_000_000) fs.renameSync(FILE, FILE + ".old"); } catch {} };
+rotate();
+setInterval(rotate, 3600_000).unref(); // 動きっぱなしでも1時間ごとに大きさを確認して整理
 
 const stamp = () => {
   const d = new Date(Date.now() + 9 * 3600_000);
@@ -45,4 +47,16 @@ export function releaseLock() {
     const info = JSON.parse(fs.readFileSync(PID, "utf8"));
     if (info.pid === process.pid) fs.unlinkSync(PID);
   } catch {}
+}
+
+/** 連続で起動しすぎていないか（落ちては再起動をくり返していないか）を記録して調べる */
+const STARTS = path.join(dir, "bot.starts");
+export function recentStarts(windowMs = 10 * 60_000) {
+  let list = [];
+  try { list = JSON.parse(fs.readFileSync(STARTS, "utf8")); } catch {}
+  const now = Date.now();
+  list = list.filter((t) => now - t < 3600_000);
+  list.push(now);
+  try { fs.writeFileSync(STARTS, JSON.stringify(list)); } catch {}
+  return list.filter((t) => now - t < windowMs).length;
 }
