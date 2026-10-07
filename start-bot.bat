@@ -14,6 +14,10 @@ if not exist ".env" (
 set BOT_LOOP=1
 :loop
 node --env-file=.env bot.js
+if %errorlevel%==3 (
+  echo [futari-calendar] another copy is already running. this one stops here.
+  exit /b 0
+)
 echo [futari-calendar] bot stopped. restarting in 10 seconds... (close this window to quit)
 ping -n 11 127.0.0.1 > nul
 goto loop

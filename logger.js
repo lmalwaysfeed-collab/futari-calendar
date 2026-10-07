@@ -22,13 +22,27 @@ for (const level of ["log", "warn", "error"]) {
   };
 }
 
-/** 同じフォルダのbotが2つ動かないようにする（古いほうを止める） */
-export function takeOver() {
+/**
+ * 同じフォルダのbotが2つ動かないようにする。
+ * すでに動いているbotがいれば、あとから起動したほうがあきらめる（止めあいで何度もログインしないように）。
+ * 動いているbotは30秒ごとに「生きてるよ」を書きこむので、止まったbotの記録はすぐ古くなる。
+ */
+export function acquireLock() {
   try {
-    const old = Number(fs.readFileSync(PID, "utf8"));
-    if (old && old !== process.pid) {
-      try { process.kill(old, 0); process.kill(old); console.warn(`前に動いていたbot（pid ${old}）を止めました`); } catch {}
+    const raw = fs.readFileSync(PID, "utf8");
+    const info = raw.trim().startsWith("{") ? JSON.parse(raw) : null;
+    if (info?.pid && info.pid !== process.pid && Date.now() - (info.beat || 0) < 90_000) {
+      try { process.kill(info.pid, 0); return false; } catch {}
     }
   } catch {}
-  try { fs.writeFileSync(PID, String(process.pid)); } catch {}
+  const beat = () => { try { fs.writeFileSync(PID, JSON.stringify({ pid: process.pid, beat: Date.now() })); } catch {} };
+  beat();
+  setInterval(beat, 30_000).unref();
+  return true;
+}
+export function releaseLock() {
+  try {
+    const info = JSON.parse(fs.readFileSync(PID, "utf8"));
+    if (info.pid === process.pid) fs.unlinkSync(PID);
+  } catch {}
 }

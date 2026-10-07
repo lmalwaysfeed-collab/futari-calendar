@@ -1,6 +1,6 @@
 // ふたりカレンダー bot 本体
 // 起動: npm start
-import { takeOver } from "./logger.js";
+import { acquireLock, releaseLock } from "./logger.js";
 import {
   Client, GatewayIntentBits, Events, ApplicationCommandOptionType as T, ChannelType,
   EmbedBuilder, AttachmentBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags,
@@ -1071,24 +1071,40 @@ function start(withMessages) {
   client.on(Events.VoiceStateUpdate, handleVoice);
   if (withMessages) client.on(Events.MessageCreate, (msg) => handleMessage(msg, client.user.id));
   client.login(process.env.DISCORD_TOKEN).catch((e) => {
+    client.destroy();
     if (withMessages && /disallowed intents/i.test(e.message)) {
       console.warn("Message Content Intent がオフなので、書きこみ読み取りなしで起動します");
-      client.destroy();
-      start(false);
-    } else {
-      console.error("ログインに失敗:", e.message);
-      process.exit(1);
+      return start(false);
     }
+    const reset = e.message.match(/resets at (\S+)/);
+    if (reset) {
+      // Discordのログイン回数（1日1000回）を使い切ったとき：むやみにためさず、回数が戻るまで待つ
+      const at = Date.parse(reset[1]);
+      const wait = Math.max(60_000, (at || Date.now() + 3600_000) - Date.now() + 10_000);
+      const jst = new Date((at || Date.now() + wait) + 9 * 3600_000).toISOString().slice(5, 16).replace("T", " ").replace("-", "/");
+      console.error(`Discordへのログイン回数が1日の上限に達しました。${jst} ごろに自動でもう一度つなぎます（このまま待っていてね）`);
+      return setTimeout(() => start(withMessages), wait);
+    }
+    if (/token/i.test(e.message)) {
+      console.error("ログインに失敗: Tokenがちがうみたい。.env の DISCORD_TOKEN を確認してね（5分後にもう一度ためします）", e.message);
+      return setTimeout(() => process.exit(1), 5 * 60_000);
+    }
+    console.error("ログインに失敗:", e.message, "（1分後にもう一度ためします）");
+    setTimeout(() => process.exit(1), 60_000);
   });
 }
 
-for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, async () => { await SV.stopAll(); process.exit(0); });
+for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, async () => { await SV.stopAll(); releaseLock(); process.exit(0); });
 
 if (!process.env.TEST) {
   if (!process.env.DISCORD_TOKEN) {
     console.error(".env に DISCORD_TOKEN がありません。README の手順を見てね");
     process.exit(1);
   }
-  takeOver();
+  if (!acquireLock()) {
+    console.warn("このフォルダのbotはもう動いているので、こちらは起動しません");
+    process.exit(3); // start-bot.bat はこの番号を見て、くり返しをやめる
+  }
+  process.on("exit", releaseLock);
   start(true);
 }
