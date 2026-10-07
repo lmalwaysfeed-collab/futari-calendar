@@ -165,7 +165,15 @@ SHIWAKE_DIR=C:\Users\あなたの名前\Documents\shiwake-battle
 
 ---
 
-## PCをつけたら自動でbotを起動する
+## PCをつけたら、ログインしなくても裏で動かす（おすすめ）
+
+1. このフォルダの **`service-on.bat`** を右クリック →「**管理者として実行**」
+2. パスワードを聞かれたら、Windowsのパスワードを入れる（PINでログインしている人は、Microsoftアカウントのパスワード）
+3. 「OK」と出たら完了
+
+これで、PCの電源を入れて1分たつと、だれもログインしていなくてもbotが裏で動きます。サインアウトしたり、ほかのアカウントに切りかえたりしても止まりません。画面は出ないので、記録は `bot.log` で見られます。やめたいときは `autostart-off.bat` です。
+
+## PCをつけたら自動でbotを起動する（ログインしたときだけ）
 
 1. このフォルダの **`autostart-on.bat`** をダブルクリック
 2. 「OK」と出たら完了。次からはPCにログインするだけで、画面に出ずにbotが動きます
@@ -208,7 +216,7 @@ bot.js      bot本体（入力・ボタン・朝のお知らせ・リマイン�
 servers.js  仕訳バトルとトンネルの起動・停止
 art.js / art-render.js  お題ガチャ・ギャラリーのデータと画像
 gallery/    保存した作品（アップデートしても消えません）
-start-bot.bat / autostart-on.bat / autostart-off.bat  自動起動まわり
+start-bot.bat / service-on.bat / autostart-on.bat / autostart-off.bat  自動起動まわり
 render.js   カレンダー画像のデザイン（色やかざりはここ）
 views.js    予定 → 画像の中身
 image.js    画像をPNGにする
