@@ -15,5 +15,5 @@ set BOT_LOOP=1
 :loop
 node --env-file=.env bot.js
 echo [futari-calendar] bot stopped. restarting in 10 seconds... (close this window to quit)
-timeout /t 10 /nobreak > nul
+ping -n 11 127.0.0.1 > nul
 goto loop
